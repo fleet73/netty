@@ -38,17 +38,19 @@ public class UniqueIpFilter extends AbstractRemoteAddressFilter<InetSocketAddres
     @Override
     protected boolean accept(ChannelHandlerContext ctx, InetSocketAddress remoteAddress) throws Exception {
         final InetAddress remoteIp = remoteAddress.getAddress();
-        if (connected.contains(remoteIp)) {
+        // Atomic insert: ConcurrentSet.add uses putIfAbsent. The previous contains-then-add
+        // race (and ignoring add's return value) allowed concurrent connects from the same
+        // IP on different EventLoops to both be accepted, breaking the one-IP-one-Channel
+        // invariant used for session / authz limiting.
+        if (!connected.add(remoteIp)) {
             return false;
-        } else {
-            connected.add(remoteIp);
-            ctx.channel().closeFuture().addListener(new ChannelFutureListener() {
-                @Override
-                public void operationComplete(ChannelFuture future) throws Exception {
-                    connected.remove(remoteIp);
-                }
-            });
-            return true;
         }
+        ctx.channel().closeFuture().addListener(new ChannelFutureListener() {
+            @Override
+            public void operationComplete(ChannelFuture future) throws Exception {
+                connected.remove(remoteIp);
+            }
+        });
+        return true;
     }
 }

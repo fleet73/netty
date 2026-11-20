@@ -179,6 +179,75 @@ public class IpSubnetFilterTest {
         Assert.assertTrue(ch4.isActive());
     }
 
+    @Test
+    public void testUniqueIpFilterConcurrentSameIpAcceptedOnce() throws Exception {
+        // Multi-threaded accept of the same IP must honor one-IP-one-Channel. The old
+        // contains-then-add path ignored ConcurrentSet.add's putIfAbsent result so a
+        // losing racer still returned true.
+        final UniqueIpFilter handler = new UniqueIpFilter();
+        final int threads = 32;
+        final java.util.concurrent.atomic.AtomicInteger accepted =
+                new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.CountDownLatch start =
+                new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.CountDownLatch done =
+                new java.util.concurrent.CountDownLatch(threads);
+        final java.util.concurrent.ExecutorService es =
+                java.util.concurrent.Executors.newFixedThreadPool(threads);
+        final java.util.List<EmbeddedChannel> channels =
+                java.util.Collections.synchronizedList(new java.util.ArrayList<EmbeddedChannel>());
+        try {
+            for (int i = 0; i < threads; i++) {
+                es.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            start.await();
+                            EmbeddedChannel ch = newEmbeddedInetChannel("10.20.30.40", handler);
+                            channels.add(ch);
+                            if (ch.isActive()) {
+                                accepted.incrementAndGet();
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        } finally {
+                            done.countDown();
+                        }
+                    }
+                });
+            }
+            start.countDown();
+            Assert.assertTrue(done.await(30, java.util.concurrent.TimeUnit.SECONDS));
+            Assert.assertEquals("only one concurrent connect from the same IP may be accepted",
+                    1, accepted.get());
+        } finally {
+            es.shutdownNow();
+            for (EmbeddedChannel ch : channels) {
+                ch.finishAndReleaseAll();
+            }
+        }
+    }
+
+    @Test
+    public void testIpv4MappedAddressDoesNotMatchIpv4OnlyRule() throws Exception {
+        // After the unsigned BigInteger fix, IPv4-mapped Inet6Address still does not match
+        // Ip4SubnetFilterRule (family split). Native transport normalizes ::ffff: peers to
+        // Inet4Address on accept, so dual-stack TCP peers are not an ACL bypass here; this
+        // test documents the intentional family mismatch for forced Inet6 mapped forms.
+        IpSubnetFilterRule rejectV4 = new IpSubnetFilterRule("10.0.0.0", 8, IpFilterRuleType.REJECT);
+        byte[] mapped = new byte[16];
+        mapped[10] = (byte) 0xff;
+        mapped[11] = (byte) 0xff;
+        mapped[12] = 10;
+        mapped[13] = 1;
+        mapped[14] = 2;
+        mapped[15] = 3;
+        java.net.Inet6Address mappedAddr =
+                java.net.Inet6Address.getByAddress(null, mapped, -1);
+        Assert.assertFalse(rejectV4.matches(new InetSocketAddress(mappedAddr, 1234)));
+        Assert.assertTrue(rejectV4.matches(newSockAddress("10.1.2.3")));
+    }
+
     private static EmbeddedChannel newEmbeddedInetChannel(final String ipAddress, ChannelHandler... handlers) {
         return new EmbeddedChannel(handlers) {
             @Override
