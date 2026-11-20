@@ -256,6 +256,13 @@ public class ProxyHandlerTest {
                         DESTINATION,
                         new Socks5ProxyHandler(anonSocks5Proxy.address())),
 
+                // Credentials may be configured even when the server selects NO_AUTH; must not
+                // send a password auth request (credential leak) and must still connect.
+                new SuccessTestItem(
+                        "SOCKS5: successful connection to anonymous server with credentials offered",
+                        DESTINATION,
+                        new Socks5ProxyHandler(anonSocks5Proxy.address(), USERNAME, PASSWORD)),
+
                 new FailureTestItem(
                         "Anonymous SOCKS5: rejected connection",
                         BAD_DESTINATION, "status: FORBIDDEN",
