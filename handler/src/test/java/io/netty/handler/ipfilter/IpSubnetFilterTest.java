@@ -51,6 +51,44 @@ public class IpSubnetFilterTest {
     }
 
     @Test
+    public void testIpv6DefaultRouteMatchesHighBitAddresses() {
+        // ::/0 must match the entire IPv6 space, including addresses whose first
+        // octet has the high bit set (unsigned). Using signed BigInteger(byte[])
+        // incorrectly excludes these and breaks deny-all REJECT ::/0 ACLs.
+        IpSubnetFilterRule acceptAll = new IpSubnetFilterRule("::", 0, IpFilterRuleType.ACCEPT);
+        Assert.assertTrue(acceptAll.matches(newSockAddress("::1")));
+        Assert.assertTrue(acceptAll.matches(newSockAddress("2001:db8::1")));
+        Assert.assertTrue(acceptAll.matches(newSockAddress("fc00::1")));
+        Assert.assertTrue(acceptAll.matches(newSockAddress("fd12:3456::1")));
+        Assert.assertTrue(acceptAll.matches(newSockAddress("fe80::1")));
+        Assert.assertTrue(acceptAll.matches(newSockAddress("ff02::1")));
+        Assert.assertTrue(acceptAll.matches(newSockAddress("8000::1")));
+
+        IpSubnetFilterRule rejectAll = new IpSubnetFilterRule("::", 0, IpFilterRuleType.REJECT);
+        Assert.assertTrue(rejectAll.matches(newSockAddress("fe80::1")));
+        Assert.assertTrue(rejectAll.matches(newSockAddress("fc00::1")));
+    }
+
+    @Test
+    public void testRuleBasedIpFilterDenyAllIpv6DoesNotBypassHighBitSources() throws Exception {
+        // ALLOWLIST pattern: accept a global unicast range, then REJECT ::/0.
+        // High-bit sources must hit the REJECT catch-all, not fall through to
+        // RuleBasedIpFilter's default-accept.
+        RuleBasedIpFilter filter = new RuleBasedIpFilter(
+                new IpSubnetFilterRule("2000::", 3, IpFilterRuleType.ACCEPT),
+                new IpSubnetFilterRule("::", 0, IpFilterRuleType.REJECT));
+
+        EmbeddedChannel allowed = newEmbeddedInetChannel("2001:db8::1", filter);
+        Assert.assertTrue(allowed.isActive());
+
+        EmbeddedChannel ulaDenied = newEmbeddedInetChannel("fd00::1", filter);
+        Assert.assertFalse(ulaDenied.isActive());
+
+        EmbeddedChannel linkLocalDenied = newEmbeddedInetChannel("fe80::1", filter);
+        Assert.assertFalse(linkLocalDenied.isActive());
+    }
+
+    @Test
     public void testIp4SubnetFilterRule() throws Exception {
         IpSubnetFilterRule rule = new IpSubnetFilterRule("192.168.56.1", 24, IpFilterRuleType.ACCEPT);
         for (int i = 0; i <= 255; i++) {

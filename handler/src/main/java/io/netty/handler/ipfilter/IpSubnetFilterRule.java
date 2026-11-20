@@ -167,7 +167,11 @@ public final class IpSubnetFilterRule implements IpFilterRule {
             byte[] octets = ipAddress.getAddress();
             assert octets.length == 16;
 
-            return new BigInteger(octets);
+            // Use an unsigned construction. new BigInteger(octets) treats the
+            // array as two's-complement, so addresses with the high bit set
+            // (ULA fc00::/7, link-local fe80::/10, multicast, etc.) become
+            // negative and fail to match catch-all rules such as ::/0.
+            return new BigInteger(1, octets);
         }
 
         private static BigInteger prefixToSubnetMask(int cidrPrefix) {
